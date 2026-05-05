@@ -1,0 +1,275 @@
+#!/bin/bash
+
+NOTES_DIR="/home/val/Documentos/Notes/01 Snippets"
+EDITOR_APP="${EDITOR_APP:-mousepad}"
+DATE_FORMAT=$(date +%Y-%m-%d)
+
+ROFI_THEME='
+window {
+    width: 820px;
+}
+listview {
+    lines: 8;
+}
+inputbar {
+    padding: 5px;
+}
+'
+
+mkdir -p "$NOTES_DIR"
+
+copy_to_clipboard() {
+    if command -v wl-copy >/dev/null 2>&1 && [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+        wl-copy
+    elif command -v xclip >/dev/null 2>&1; then
+        xclip -selection clipboard
+    elif command -v wl-copy >/dev/null 2>&1; then
+        wl-copy
+    else
+        notify-send "Trechos" "Instale xclip ou wl-clipboard."
+        return 1
+    fi
+}
+
+read_clipboard() {
+    if command -v wl-paste >/dev/null 2>&1 && [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+        wl-paste 2>/dev/null
+    elif command -v xclip >/dev/null 2>&1; then
+        xclip -o -selection clipboard 2>/dev/null
+    elif command -v wl-paste >/dev/null 2>&1; then
+        wl-paste 2>/dev/null
+    fi
+}
+
+rofi_menu() {
+    local extra_args=()
+    [ "$XDG_SESSION_TYPE" = "wayland" ] && extra_args+=("-normal-window")
+
+    rofi -dmenu -i "${extra_args[@]}" -theme-str "$ROFI_THEME" "$@"
+}
+
+short_path() {
+    local dir="$1"
+
+    if [ "$dir" = "$NOTES_DIR" ]; then
+        echo "/"
+    else
+        echo "${dir#$NOTES_DIR/}"
+    fi
+}
+
+safe_filename() {
+    echo "$1" | sed 's/[\/:*?"<>|]/-/g'
+}
+
+get_snippet_code() {
+    local file="$1"
+
+    awk '
+        /^```/ {
+            count++
+            if (count == 1) next
+            if (count == 2) exit
+        }
+        count == 1 { print }
+    ' "$file"
+}
+
+list_entries() {
+    local dir="$1"
+    local sort_mode="$2"
+
+    if [ "$dir" != "$NOTES_DIR" ]; then
+        printf "← ..\tUP\t%s\n" "$(dirname "$dir")"
+    fi
+
+    find "$dir" -mindepth 1 -maxdepth 1 -type d -printf "📁 %f\tDIR\t%p\n" | sort -f
+
+    if [ "$sort_mode" = "recent" ]; then
+        find "$dir" -mindepth 1 -maxdepth 1 -type f -name "*.md" -printf "%T@\t%f\tFILE\t%p\n" \
+            | sort -rn \
+            | cut -f2-
+    else
+        find "$dir" -mindepth 1 -maxdepth 1 -type f -name "*.md" -printf "%f\tFILE\t%p\n" \
+            | sort -f
+    fi
+}
+
+create_group() {
+    local current_dir="$1"
+    local name
+
+    name=$(rofi_menu -p "📁 +grupo")
+
+    [ -z "$name" ] && return 1
+
+    mkdir -p "$current_dir/$name"
+    notify-send "Trechos" "Grupo: $name"
+
+    echo "$current_dir/$name"
+}
+
+new_snippet() {
+    local current_dir="$1"
+    local name
+    local clean_name
+    local file_path
+
+    name=$(rofi_menu -p "✚ +trecho")
+
+    [ -z "$name" ] && return 1
+
+    clean_name="$(safe_filename "$name")"
+    file_path="$current_dir/${clean_name}.md"
+
+    cat > "$file_path" <<EOF
+---
+title: $name
+tags:
+  - clipped
+dateCreated: "[[$DATE_FORMAT]]"
+---
+
+\`\`\`
+$(read_clipboard)
+\`\`\`
+EOF
+
+    "$EDITOR_APP" "$file_path"
+}
+
+confirm_delete() {
+    local file="$1"
+    local name
+    local check
+
+    name="$(basename "$file" .md)"
+
+    check=$(echo -e "Não\nSim" | rofi_menu -p "Apagar '$name'?")
+
+    if [ "$check" = "Sim" ]; then
+        rm "$file"
+        notify-send "Trechos" "Apagado."
+    fi
+}
+
+show_actions() {
+    local file="$1"
+    local code
+    local preview
+    local action
+    local name
+
+    name="$(basename "$file" .md)"
+    code="$(get_snippet_code "$file")"
+
+    preview="$(echo "$code" \
+        | tr '\n' ' ' \
+        | tr '\r' ' ' \
+        | sed 's/\t/ /g' \
+        | sed 's/  */ /g' \
+        | cut -c 1-120)"
+
+    action=$(echo -e "Copiar\nEditar\nApagar" | rofi_menu \
+        -p "$name" \
+        -mesg "$preview")
+
+    case "$action" in
+        "Copiar")
+            echo -n "$code" | copy_to_clipboard
+            notify-send "Trechos" "Copiado."
+            return 99
+            ;;
+        "Editar")
+            "$EDITOR_APP" "$file"
+            ;;
+        "Apagar")
+            confirm_delete "$file"
+            ;;
+    esac
+}
+
+browser() {
+    local current_dir="$1"
+    local sort_mode="recent"
+
+    while true; do
+        local current_label
+        local entries
+        local selection
+        local ret
+        local label
+        local type
+        local path
+        local msg
+
+        current_label="$(short_path "$current_dir")"
+
+        if [ "$sort_mode" = "recent" ]; then
+            msg="✚ Alt+n · 📁 Alt+g · ⇅ Alt+o · ← Alt+b · ↓"
+        else
+            msg="✚ Alt+n · 📁 Alt+g · ⇅ Alt+o · ← Alt+b · A"
+        fi
+
+        entries="$(list_entries "$current_dir" "$sort_mode")"
+
+        selection=$(echo "$entries" | rofi_menu \
+            -p "$current_label" \
+            -display-columns 1 \
+            -mesg "$msg" \
+            -kb-custom-1 "Alt+n" \
+            -kb-custom-2 "Alt+g" \
+            -kb-custom-3 "Alt+o" \
+            -kb-custom-4 "Alt+q")
+
+        ret=$?
+
+        case "$ret" in
+            10)
+                new_snippet "$current_dir"
+                ;;
+            11)
+                local new_dir
+                new_dir="$(create_group "$current_dir")" || continue
+                current_dir="$new_dir"
+                ;;
+            12)
+                if [ "$sort_mode" = "recent" ]; then
+                    sort_mode="az"
+                else
+                    sort_mode="recent"
+                fi
+                ;;
+            13)
+                if [ "$current_dir" != "$NOTES_DIR" ]; then
+                    current_dir="$(dirname "$current_dir")"
+                fi
+                ;;
+            0)
+                [ -z "$selection" ] && continue
+
+                label="$(echo "$selection" | cut -f1)"
+                type="$(echo "$selection" | cut -f2)"
+                path="$(echo "$selection" | cut -f3-)"
+
+                case "$type" in
+                    "UP")
+                        current_dir="$path"
+                        ;;
+                    "DIR")
+                        current_dir="$path"
+                        ;;
+                    "FILE")
+                        show_actions "$path"
+                        [ $? -eq 99 ] && exit 0
+                        ;;
+                esac
+                ;;
+            *)
+                exit 0
+                ;;
+        esac
+    done
+}
+
+browser "$NOTES_DIR"
