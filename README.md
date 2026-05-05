@@ -1,0 +1,1 @@
+# rofi-snippet-holder
