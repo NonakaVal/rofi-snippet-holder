@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_NAME="snippet-holder"
 INSTALL_DIR="$HOME/.local/bin"
+LIB_DIR="$INSTALL_DIR/lib"
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SNIPPET_DIR="${SNIPPET_DIR:-$HOME/Documentos/Notes/01 Snippets}"
@@ -75,18 +76,38 @@ if [ "$missing" -eq 1 ]; then
     exit 1
 fi
 
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$SNIPPET_DIR"
+mkdir -p "$INSTALL_DIR" "$LIB_DIR" "$SNIPPET_DIR"
 
-sed \
-    -e "s|^NOTES_DIR=.*|NOTES_DIR=\"$SNIPPET_DIR\"|" \
-    -e "s|^EDITOR_APP=.*|EDITOR_APP=\"\$EDITOR_APP:-$EDITOR_APP\"|" \
-    "$SOURCE_DIR/$SCRIPT_NAME" > "$INSTALL_DIR/$SCRIPT_NAME"
-
+cp "$SOURCE_DIR/$SCRIPT_NAME" "$INSTALL_DIR/$SCRIPT_NAME"
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
+
+cp "$SOURCE_DIR/lib/"*.sh "$LIB_DIR/"
+chmod +x "$LIB_DIR/"*.sh
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/snippet-holder"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_FILE" <<EOF
+# snippet-holder — configuracao
+
+NOTES_DIR="$SNIPPET_DIR"
+EDITOR_APP="$EDITOR_APP"
+DEFAULT_SORT="recent"
+HISTORY_LIMIT="20"
+PREVIEW_LINES="5"
+CACHE_TTL="30"
+TEMPLATE_DIR="$CONFIG_DIR/templates"
+EOF
+    echo "[ok] configuracao criada em $CONFIG_FILE"
+else
+    echo "[i] configuracao existente em $CONFIG_FILE (nao modificada)"
+fi
 
 echo ""
 echo "[ok] instalado em $INSTALL_DIR/$SCRIPT_NAME"
+echo "[ok] modulos em $LIB_DIR/"
 echo "[ok] pasta de snippets: $SNIPPET_DIR"
 echo "[ok] editor padrao: $EDITOR_APP"
 echo ""
